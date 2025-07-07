@@ -1,0 +1,7 @@
+# Run this to generate a sample model
+from sklearn.ensemble import IsolationForest
+import joblib
+
+model = IsolationForest(n_estimators=100)
+# Train with your actual data in production
+joblib.dump(model, 'ml_model.pkl')
