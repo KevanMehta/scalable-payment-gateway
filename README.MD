@@ -1,4 +1,4 @@
-# Scalable Payment Processing System
+# Scalable Payment Gateway
 
 [![CI/CD](https://github.com/yourusername/payment-system/actions/workflows/deploy.yml/badge.svg)](https://github.com/yourusername/payment-system/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
