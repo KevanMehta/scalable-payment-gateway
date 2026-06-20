@@ -1,22 +1,41 @@
-name: Deploy to AWS
-
+name: Terraform Deployment
 on:
   push:
     branches: [ main ]
+  pull_request:
 
 jobs:
-  deploy:
+  terraform:
+    name: 'Terraform Plan/Apply'
     runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write  # Needed for AWS OIDC auth
+      contents: read
+
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform -chdir=infra init
+
+      - name: Terraform Format
+        run: terraform -chdir=infra fmt -check
+
+      - name: Terraform Validate
+        run: terraform -chdir=infra validate
+
+      - name: Terraform Plan
+        if: github.ref == 'refs/heads/main'
+        run: terraform -chdir=infra plan
+
       - name: Terraform Apply
-        run: |
-          cd infra/
-          terraform init
-          terraform apply -auto-approve
-          
-      - name: Deploy to EKS
-        run: |
-          aws eks update-kubeconfig --name payment-system
-          kubectl apply -f k8s/
+        if: github.ref == 'refs/heads/main'
+        run: terraform -chdir=infra apply -auto-approve
