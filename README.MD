@@ -1,7 +1,6 @@
 # Scalable Payment Gateway
 
 [![CI/CD](https://github.com/yourusername/payment-system/actions/workflows/deploy.yml/badge.svg)](https://github.com/yourusername/payment-system/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A distributed payment gateway reference implementation demonstrating transaction orchestration, fraud detection, event-driven processing, and Kubernetes deployment.
 
@@ -29,3 +28,7 @@ cd payment-system
 
 # Start services (Docker required)
 ./setup.sh
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
