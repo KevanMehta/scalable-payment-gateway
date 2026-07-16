@@ -28,6 +28,7 @@ cd payment-system
 
 # Start services (Docker required)
 ./setup.sh
+```
 
 ## License
 
