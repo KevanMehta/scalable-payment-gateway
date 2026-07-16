@@ -3,13 +3,13 @@
 [![CI/CD](https://github.com/yourusername/payment-system/actions/workflows/deploy.yml/badge.svg)](https://github.com/yourusername/payment-system/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A high-availability payment gateway processing **10K+ transactions/sec** with 99.99% uptime, featuring real-time fraud detection and Kubernetes orchestration.
+A distributed payment gateway reference implementation demonstrating transaction orchestration, fraud detection, event-driven processing, and Kubernetes deployment.
 
 ## 🚀 Key Features
 - **Distributed Transactions**: Saga pattern for atomic operations
 - **Multi-Layer Fraud Prevention**: Rule engine + ML model (Isolation Forest)
 - **Event-Driven Architecture**: Kafka-powered audit trails
-- **Production-Grade Observability**: Prometheus + Grafana dashboard
+- - **Observability**: Prometheus metrics and a Grafana dashboard
 
 ## 🛠 Tech Stack
 | Component               | Technology |
