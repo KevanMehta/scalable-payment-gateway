@@ -1,6 +1,6 @@
 fastapi==0.95.2
 uvicorn==0.22.0
 redis==4.5.5
-pybreaker==1.0.1
+pybreaker==1.4.1
 kafka-python==2.0.2
 prometheus-client==0.17.0
