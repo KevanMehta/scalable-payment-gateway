@@ -1,4 +1,4 @@
-fastapi==0.95.2
+fastapi==0.139.2
 uvicorn==0.22.0
 redis==4.5.5
 pybreaker==1.0.1
