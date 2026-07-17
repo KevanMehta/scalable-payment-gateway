@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: fraud-detection/requirements.txt
+      - name: Install test dependencies
+        run: python -m pip install -r fraud-detection/requirements.txt pytest
+      - name: Compile Python sources
+        run: python -m compileall -q api-gateway fraud-detection load-test payment-service
+      - name: Run fraud rule unit tests
+        run: python -m pytest fraud-detection/tests -q
+        env:
+          PYTHONPATH: fraud-detection
+
+  configuration:
+    name: Configuration checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra
+      - name: Parse Kubernetes manifests
+        run: ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_stream(File.read(file)) }' k8s/*.yaml
