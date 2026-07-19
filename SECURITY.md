@@ -2,26 +2,36 @@
 
 ## Supported Versions
 
-This portfolio project has no released or deployed version. Security fixes are applied to the latest commit on `main`; older commits are not supported.
+This reference implementation has no released or hosted version. Security fixes are applied to the latest commit on `main`; older commits are not supported.
 
 ## Reporting a Vulnerability
 
-Please do not open a public issue for a suspected vulnerability. Use GitHub's **Report a vulnerability** option under the repository's Security tab. If private vulnerability reporting is not enabled, contact the repository owner through the contact method listed on their GitHub profile and include:
+Do not open a public issue. Use **Report a vulnerability** in the repository's Security tab. If private vulnerability reporting is unavailable, contact the maintainer through the method on their GitHub profile.
 
-- the affected file, endpoint, or configuration;
-- steps to reproduce the issue with synthetic data;
-- the potential impact; and
-- any suggested mitigation.
+Include the affected revision, synthetic reproduction steps, impact, and a suggested mitigation if available. Never submit real cardholder data, credentials, API keys, provider tokens, or customer information. This project has no response-time SLA.
 
-Do not include real cardholder data, credentials, access tokens, or other sensitive information. Acknowledgement and remediation timing depend on maintainer availability; this repository has no security SLA.
+## Implemented Controls
 
-## Security Assumptions and Limitations
+- Merchant API keys are scoped by merchant ID and compared in constant time.
+- Payment access is restricted to the authenticated merchant.
+- Idempotency keys and provider references have database uniqueness constraints.
+- Webhooks use HMAC-SHA256 over the raw body and timestamp, a five-minute tolerance, and unique event IDs.
+- Payment changes are constrained by an explicit state machine.
+- Card tokens are accepted as synthetic opaque inputs and are not persisted.
+- Payment state and outbox events share one transaction.
 
-- The code is an educational reference implementation and must not process real payments or cardholder data.
-- There is no authentication, authorization, TLS termination, secret management, audit log, durable ledger, or payment-provider integration.
-- The API accepts an opaque demo card token but does not verify it. Never submit a primary account number or real provider token.
-- Redis and Kafka hostnames assume a trusted local network. Their examples do not configure encryption or authentication.
-- Idempotency is incomplete and not registered with the API. It should not be relied on to prevent duplicate financial operations.
-- The pickle-based model-loading example is unsafe for untrusted artifacts. Python pickle can execute code during deserialization; only locally created, reviewed artifacts should ever be loaded.
-- Terraform and Kubernetes files are partial examples. Review IAM, network exposure, image provenance, resource limits, secrets, and state handling before using any part of them.
-- Dependencies are pinned for repeatability but still require regular vulnerability review. Dependabot is configured to propose updates.
+## Assumptions and Limitations
+
+- This project must not process real payments or cardholder data and has not been assessed for PCI DSS compliance.
+- API keys are loaded from environment configuration as plaintext. A deployment needs hashed or managed secrets, rotation, revocation, scopes, and audit trails.
+- TLS termination, network policy, database encryption, backup, restore, and host hardening are outside this repository.
+- SQLite is for local execution. It does not provide the availability or multi-node behavior expected of a deployed payment platform.
+- Rate limiting is per process and can be bypassed across replicas. Use a shared limiter or API gateway policy in a distributed deployment.
+- Outbox delivery is at-least-once. Consumers must transactionally deduplicate `event_id` values.
+- Reconciliation reports discrepancies but does not repair them automatically.
+- The pickle-based fraud-model example must never load an untrusted artifact; Python pickle can execute code while loading.
+- Terraform and Kubernetes files are partial examples. Review IAM, exposure, secrets, image provenance, resources, and state before use.
+
+## Secret Handling
+
+Use different secrets for merchant authentication and webhook signing. Do not commit `.env` files or local database files. Rotate any credential immediately if it appears in logs, an issue, a pull request, or Git history.

@@ -1,0 +1,4 @@
+-r api-gateway/requirements.txt
+-r fraud-detection/requirements.txt
+httpx2==2.7.0
+pytest==9.1.1

@@ -18,15 +18,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: fraud-detection/requirements.txt
+          cache-dependency-path: requirements-dev.txt
       - name: Install test dependencies
-        run: python -m pip install -r fraud-detection/requirements.txt pytest
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -r requirements-dev.txt
       - name: Compile Python sources
-        run: python -m compileall -q api-gateway fraud-detection load-test payment-service
-      - name: Run fraud rule unit tests
-        run: python -m pytest fraud-detection/tests -q
+        run: python -m compileall -q api-gateway fraud-detection load-test payment-service reconciliation
+      - name: Run unit and reliability tests
+        run: python -m pytest api-gateway/tests fraud-detection/tests -q
         env:
-          PYTHONPATH: fraud-detection
+          PYTHONPATH: api-gateway:fraud-detection
 
   configuration:
     name: Configuration checks
