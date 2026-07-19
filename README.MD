@@ -3,132 +3,208 @@
 [![CI](https://github.com/KevanMehta/scalable-payment-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/KevanMehta/scalable-payment-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A portfolio reference implementation exploring common payment-system patterns across API, fraud screening, event delivery, reconciliation, and deployment configuration.
+A payment-platform reference implementation focused on correctness at failure-prone boundaries: duplicate requests, provider webhooks, state transitions, asynchronous events, and reconciliation.
 
-> This repository is a collection of focused examples, not a runnable end-to-end payment processor. It does not contact card networks or move money.
+> This project processes synthetic tokens only. It does not connect to card networks, store card numbers, or move money.
 
-## Why I Built This
+## Why Payment Gateways Require Idempotency
 
-I built this project to study how payment systems divide responsibilities at service boundaries: accepting a payment request, preventing duplicate work, screening simple fraud signals, emitting events, compensating failed workflow steps, and reconciling stored records. The repository also explores how those components can be described for containers, Kubernetes, and AWS without treating the examples as a complete deployment.
+Clients retry when connections time out, even when the server may have committed the original request. Without idempotency, the retry can create a second authorization or charge.
 
-## Features
+`POST /payments` therefore requires an `Idempotency-Key`. The key is scoped to the authenticated merchant and stored in the same database transaction as the payment and its initial outbox event:
 
-- FastAPI payment endpoint with request validation, a fixed high-value fraud rule, transaction IDs, and Redis-backed demo state
-- Redis idempotency middleware and a separate payment processor example with Kafka event emission
-- Rule-based fraud scoring with unit-test coverage for the high-value/new-recipient rule
-- In-process saga coordinator with reverse-order compensation
-- PostgreSQL reconciliation schema managed as a Flyway migration
-- React/D3 fraud heatmap component that expects a fraud-statistics API
-- Kubernetes Deployment, Service, and HorizontalPodAutoscaler examples
-- Terraform examples for a VPC and EKS cluster
-- Locust workload definition for exercising the payment endpoint
+- the first request creates one payment;
+- an identical retry returns the original response;
+- reuse with a different payload returns a conflict; and
+- concurrent requests serialize around the unique `(merchant_id, idempotency_key)` constraint.
 
-## Architecture
+This gives effectively-once payment creation inside the database boundary. It cannot make external systems exactly-once. Provider calls and event consumers must also accept idempotency identifiers and deduplicate stable event IDs.
 
-The code is organized as examples of the main boundaries in a payment flow. Several connections shown below are design intent rather than a fully wired local runtime.
+## Implemented Capabilities
+
+- Merchant-scoped API-key authentication with constant-time secret comparison
+- Required idempotency keys and atomic duplicate-payment prevention
+- Integer minor-unit storage for monetary amounts
+- Explicit payment state machine with optimistic version checks
+- HMAC-SHA256 webhook verification, timestamp tolerance, and replay protection
+- Transactional outbox committed with payment state changes
+- At-least-once outbox worker with exponential retry, stale-claim recovery, and dead-letter state
+- Operator-controlled dead-letter requeue
+- Kafka publisher adapter using stable event IDs and `acks=all`
+- Saga step retry and reverse-order compensation with surfaced compensation failures
+- Reconciliation jobs that persist missing-provider and status-mismatch findings
+- Per-process merchant/IP sliding-window rate limiting
+- Tests for duplicate, concurrent, rollback, network-failure, retry, replay, and recovery paths
+
+## Transaction Flow
 
 ```mermaid
-flowchart LR
-    Client["API client"] --> API["FastAPI gateway"]
-    API --> Redis["Redis demo state"]
-    API -. "separate processor example" .-> Kafka["Kafka payment-events topic"]
-    API -. "not currently integrated" .-> Fraud["Fraud rules / model stub"]
-    Kafka -. "consumer not implemented" .-> Reconciliation["PostgreSQL reconciliation schema"]
-    Dashboard["React/D3 heatmap component"] -. "expected endpoint not implemented" .-> API
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB as Payment database
+    participant Worker as Outbox worker
+    participant Kafka
+    participant Provider
+
+    Client->>API: POST /payments + merchant credentials + idempotency key
+    API->>DB: BEGIN IMMEDIATE
+    DB->>DB: Insert idempotency key, payment, outbox event
+    DB-->>API: COMMIT
+    API-->>Client: 201 payment pending
+    Worker->>DB: Claim pending outbox event
+    Worker->>Kafka: Publish with stable event_id
+    Kafka-->>Worker: Acknowledge
+    Worker->>DB: Mark published
+    Provider->>API: Signed status webhook
+    API->>API: Verify signature and timestamp
+    API->>DB: Record event ID + transition state + outbox event
+    DB-->>API: Atomic commit
 ```
 
-The primary request path is `POST /payments`. It rejects amounts above 10,000, writes a generated transaction record to Redis, and returns the transaction ID. No external payment provider is called.
+The state machine permits:
 
-## Engineering Decisions
-
-- **FastAPI for the API boundary.** Pydantic models keep the request contract visible and provide validation with little framework code. A larger service might choose Spring Boot or another framework when deeper platform standardization outweighs the smaller Python surface.
-- **Redis for ephemeral examples.** Redis makes duplicate-request and short-lived transaction-state patterns easy to demonstrate. It is not used here as a durable financial ledger; PostgreSQL or another transactional store would be required for authoritative payment records.
-- **Kafka for event-publication examples.** The payment processor and event helper show an asynchronous `payment-events` boundary. Delivery confirmation, retries, consumers, and an outbox are not implemented, so the examples do not guarantee event delivery.
-- **Saga compensation for workflow failure.** The coordinator records completed steps and compensates them in reverse order. It is intentionally in-process; a durable workflow engine would be more appropriate when execution must survive process restarts.
-- **PostgreSQL and Flyway for reconciliation data.** The schema uses relational constraints and indexed query fields, while a versioned migration makes the database change explicit. The repository contains the migration but no reconciliation application.
-- **Kubernetes and Terraform as deployment sketches.** These files expose scaling and infrastructure concerns without claiming a complete deployment. Docker Compose was not added because the repository does not yet contain enough complete services to support an honest one-command environment.
-
-More detail is captured in [docs/decisions.md](docs/decisions.md).
-
-## Tradeoffs
-
-- Payment processing is simulated by a Redis write; there is no provider integration, authorization, capture, settlement, refund, or ledger.
-- Idempotency middleware exists but is not registered with the FastAPI application. Its cached response also omits status and headers.
-- Fraud evaluation is split between a tested rule engine and an incomplete model-backed service. The checked-in `ml_model.pkl` is a placeholder, not a trained model artifact.
-- Kafka publication is illustrative and is not connected to the main endpoint. The code has no consumer, schema management, outbox, retry, or dead-letter handling.
-- The frontend contains one component but no complete application or implemented `/api/fraud-stats` endpoint.
-- Terraform references an IAM role that is not defined, and the Kubernetes manifests assume an image and Redis service that are not supplied. They are not directly deployable as checked in.
-- Monetary amounts use floating-point values in the API example. A real payment boundary should use integer minor units or a decimal type with an explicit currency.
-
-## Running the Implemented Examples
-
-### Fraud rule unit test
-
-From the repository root:
-
-```bash
-python -m pip install -r fraud-detection/requirements.txt pytest
-PYTHONPATH=fraud-detection python -m pytest fraud-detection/tests -q
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> authorized
+    pending --> failed
+    pending --> cancelled
+    authorized --> captured
+    authorized --> failed
+    authorized --> cancelled
+    captured --> refunded
 ```
 
-### API example
+Invalid transitions return a conflict and do not write an event.
 
-The API requires a Redis instance resolvable as `redis` on port `6379`. From `api-gateway/`:
+## Reliability Model
+
+### Transactional outbox
+
+Payment state and event intent are written in one transaction. A worker later publishes the event and marks it complete. This prevents the classic failure where the database commits but the event is never recorded.
+
+Publishing is **at-least-once**: a worker can publish successfully and crash before marking the event complete. Every message contains a stable `event_id`; consumers must store processed IDs with their own business update to make handling effectively once.
+
+Failed publications use exponential backoff. After the configured attempt limit, the event enters `dead_letter`. Requeue is explicit so an operator can first correct the underlying dependency or payload problem. Claims abandoned by a crashed worker can be returned to `pending` with `recover_stale_outbox`.
+
+### Webhooks
+
+Provider webhooks are authenticated over the exact raw body using HMAC-SHA256. Signatures include a timestamp and are rejected outside a five-minute window. The provider event ID has a unique database constraint, so a valid replay cannot apply a state transition twice.
+
+### Reconciliation
+
+`ReconciliationJob` compares an internal payment snapshot with provider statuses and persists each mismatch plus run totals. It reports discrepancies; it does not automatically mutate payment state because provider data can be incomplete or delayed and should be reviewed under an explicit repair policy.
+
+## Security
+
+- Configure merchant keys with `PAYMENT_API_KEYS`, a JSON object mapping merchant IDs to secrets.
+- Configure webhook signing with `PAYMENT_WEBHOOK_SECRET`.
+- Use synthetic opaque tokens only; `card_token` is validated at the boundary and deliberately not persisted.
+- Payment lookup and cancellation are restricted to the authenticated merchant.
+- The included rate limiter is process-local and is not sufficient for multiple API replicas.
+- TLS termination, secret rotation, audit access controls, PCI DSS scope, and provider credential management are deployment responsibilities not implemented here.
+
+See [SECURITY.md](SECURITY.md) for reporting instructions and the complete threat assumptions.
+
+## Local Development
+
+Python 3.11 is used by CI.
 
 ```bash
-python -m pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+PYTHONPATH=api-gateway:fraud-detection python -m pytest api-gateway/tests fraud-detection/tests -q
 ```
 
-Example request:
+Run the API with a local SQLite database:
 
 ```bash
-curl -X POST http://localhost:8000/payments \
+export PAYMENT_API_KEYS='{"merchant_demo":"replace-with-a-local-secret"}'
+export PAYMENT_WEBHOOK_SECRET='replace-with-a-different-local-secret'
+export PAYMENT_DATABASE_PATH='./payment_gateway.db'
+uvicorn app.main:app --app-dir api-gateway --host 127.0.0.1 --port 8000
+```
+
+Create a synthetic payment:
+
+```bash
+curl -X POST http://127.0.0.1:8000/payments \
   -H 'Content-Type: application/json' \
-  -d '{"amount":100,"card_token":"tok_demo","merchant_id":"merchant_demo"}'
+  -H 'X-Merchant-Id: merchant_demo' \
+  -H 'X-API-Key: replace-with-a-local-secret' \
+  -H 'Idempotency-Key: checkout-session-12345' \
+  -d '{"amount":"19.95","currency":"USD","merchant_id":"merchant_demo","card_token":"tok_synthetic"}'
 ```
-
-Use synthetic tokens only. This example stores data in Redis and does not process a real payment.
-
-The root `setup.sh` is retained as an early environment sketch, but it is not runnable because a Compose file and migration service are not present.
 
 ## Testing
 
-- `fraud-detection/tests/test_rules.py` is a unit test for one fraud rule and runs in CI.
-- `api-gateway/tests/test_payments.py` is an API-level test sketch. It expects an already-running API and Redis instance and is not part of CI.
-- CI compiles the Python sources, runs the fraud-rule test, checks Terraform formatting, and parses the Kubernetes YAML files.
-- No integration, browser, end-to-end, infrastructure deployment, or measured coverage suite is currently present.
+The suite exercises:
 
-No benchmark results are claimed. The Locust file is a workload starting point; its wait time is not evidence of throughput. A useful benchmark would pin the runtime and infrastructure, generate unique idempotency keys, report latency percentiles and error rate, and publish the exact command and environment with the results.
+- identical and conflicting idempotency-key reuse;
+- eight concurrent submissions for the same logical payment;
+- rollback of the payment, key, and outbox event after an injected failure;
+- valid and invalid state transitions;
+- duplicate provider references;
+- valid, tampered, stale, and replayed webhooks;
+- network failures, retry exhaustion, dead-lettering, and requeue;
+- one-time publication behavior after acknowledgement;
+- reconciliation mismatches;
+- saga retry and reverse compensation order; and
+- rate-limit and merchant-key isolation.
+
+CI compiles Python sources, runs the API/reliability and fraud-rule tests, checks Terraform formatting, and parses Kubernetes YAML. It does not deploy infrastructure.
+
+## Architecture and Tradeoffs
+
+- **SQLite keeps the correctness model runnable locally.** `BEGIN IMMEDIATE`, unique constraints, and WAL mode make concurrency behavior testable without services. SQLite is a single-node database; PostgreSQL with equivalent constraints and transaction boundaries is the appropriate next step for multiple API replicas.
+- **The outbox separates commits from delivery.** This avoids dual writes but accepts at-least-once delivery and requires consumer deduplication.
+- **API keys keep merchant isolation explicit.** A deployed platform would use hashed/rotatable credentials, scoped authorization, and managed secret storage.
+- **The rate limiter is deliberately local.** It protects a single process only; a shared Redis-backed limiter or gateway policy is needed across replicas.
+- **Reconciliation reports rather than repairs.** Automatic repair risks overwriting correct internal state with delayed provider data.
+- **The saga is in-process.** It retries and compensates predictably but cannot survive a process restart. Durable workflow execution needs persisted checkpoints or a workflow engine.
+- **Kafka is an adapter, not a local requirement.** Core tests use a deterministic publisher function and do not require a broker.
+
+Architecture decisions are expanded in [docs/decisions.md](docs/decisions.md).
 
 ## Project Structure
 
 | Path | Purpose |
 | --- | --- |
-| `api-gateway/` | FastAPI endpoint, idempotency example, processor example, and API test sketch |
-| `fraud-detection/` | Rule engine, model-service stub, and rule test |
-| `payment-service/` | Kafka event helper and in-process saga coordinator |
-| `reconciliation/` | Maven dependency sketch and Flyway schema migration |
-| `frontend/` | React/D3 heatmap component and container sketch |
-| `infra/` | Partial AWS VPC and EKS Terraform configuration |
-| `k8s/` | API Deployment, Service, and autoscaling examples |
-| `load-test/` | Locust workload definition; no published results |
-| `docs/` | Architecture decision records |
-| `.github/` | CI, contribution templates, and dependency-update configuration |
+| `api-gateway/app/main.py` | Authenticated HTTP endpoints and validation |
+| `api-gateway/app/store.py` | Schema, transactions, state machine, idempotency, outbox, and reconciliation persistence |
+| `api-gateway/app/webhooks.py` | Webhook signing, verification, parsing, and replay-safe processing |
+| `api-gateway/app/security.py` | Merchant credential verification |
+| `api-gateway/app/rate_limit.py` | Single-process sliding-window limiter |
+| `api-gateway/tests/` | Correctness, concurrency, security, and failure-recovery tests |
+| `payment-service/outbox_worker.py` | Outbox delivery, retry, and DLQ orchestration |
+| `payment-service/events.py` | Kafka publisher adapter |
+| `payment-service/saga.py` | Retrying saga executor and compensation handling |
+| `reconciliation/job.py` | Provider-snapshot comparison job |
+| `fraud-detection/` | Separate rule-engine example |
+| `infra/`, `k8s/` | Partial deployment configuration; not a complete environment |
+
+## Benchmarking
+
+No throughput or latency results are claimed. The Locust file is an authenticated workload definition only; it is not benchmark evidence.
+
+A credible benchmark should use a defined database and CPU allocation, unique and repeated idempotency keys, fixed concurrency and ramp-up, and a recorded commit SHA. Report request counts, error classifications, latency percentiles, database saturation, and the exact Locust command. Separate new-payment results from idempotent replays.
 
 ## Future Improvements
 
-- Define one runnable local path with Compose, health checks, and deterministic test data
-- Wire idempotency and fraud evaluation into the API with atomic Redis operations
-- Replace float amounts with currency plus integer minor units or fixed-precision decimals
-- Add a durable payment record and transactional outbox before connecting Kafka consumers
-- Complete the model artifact workflow, or remove the unfinished ML path in favor of rules only
-- Add integration tests for Redis and Kafka and contract tests for payment events
-- Complete and validate the Terraform and Kubernetes configurations in a non-deploying CI plan
+- Port the store to PostgreSQL and run concurrency tests against the same engine used in deployment
+- Add a durable workflow runner with persisted saga checkpoints
+- Add consumer-side inbox/deduplication storage and Kafka integration tests
+- Add API-key hashing, rotation, fine-grained scopes, and audit logging
+- Schedule reconciliation with provider pagination, checkpointing, and operator repair workflows
+- Replace the local rate limiter with a shared policy and return standard rate-limit headers
+- Complete provider sandbox integration and contract tests without introducing real card data
+- Finish or remove the partial Terraform, Kubernetes, frontend, and model-backed fraud examples
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and review expectations. Security issues should follow [SECURITY.md](SECURITY.md), not the public issue tracker.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report suspected vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

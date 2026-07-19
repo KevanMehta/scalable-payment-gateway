@@ -1,87 +1,73 @@
 # Architecture Decisions
 
-These records describe decisions visible in the repository. They document the current examples rather than a deployed system.
+## ADR-001: Database-Scoped Effectively-Once Payment Creation
 
-## ADR-001: FastAPI for the HTTP Boundary
+**Context:** Clients retry timed-out payment requests and can submit the same request concurrently.
 
-**Status:** Accepted for the reference implementation
+**Decision:** Require merchant-scoped idempotency keys. Insert the key, payment, and initial outbox event in one transaction protected by a unique constraint. Bind the key to a canonical request hash.
 
-**Context:** The project needs a small HTTP boundary with a typed payment request and generated API documentation.
+**Alternatives:** A cache-only key can expire before the financial record and is difficult to commit atomically. A pre-insert lookup alone races under concurrency.
 
-**Decision:** Use FastAPI and Pydantic for the payment endpoint.
+**Tradeoffs:** The key table grows and needs a documented retention policy. `BEGIN IMMEDIATE` serializes SQLite writers.
 
-**Alternatives:** Flask would reduce framework concepts but require additional validation code. Spring Boot would offer a larger ecosystem for service standardization at the cost of more setup for this example.
+**Consequences:** Creation is effectively once inside this database. This does not create exactly-once behavior at external providers or consumers.
 
-**Tradeoffs:** FastAPI keeps the example compact, but synchronous Redis calls inside an async route can block the event loop.
+## ADR-002: Integer Minor Units and Explicit State Transitions
 
-**Consequences:** Request validation is explicit. A fuller implementation should either use an async Redis client or move blocking work off the event loop.
+**Context:** Binary floating-point values and unrestricted status writes create financial and workflow ambiguity.
 
-## ADR-002: Redis for Ephemeral State and Idempotency Examples
+**Decision:** Validate two-decimal inputs at the API, persist integer minor units, and allow only declared state transitions. Use a version column for optimistic update checks.
 
-**Status:** Accepted with limitations
+**Alternatives:** Fixed-precision database decimals are suitable with explicit currency rules. Floating point was rejected for stored amounts.
 
-**Context:** The examples need quick lookup of transaction state and duplicate request keys.
+**Tradeoffs:** The current conversion assumes currencies with two minor-unit digits; a currency metadata table is needed for currencies with different exponents.
 
-**Decision:** Use Redis with 24-hour keys in the payment processor and idempotency middleware examples.
+**Consequences:** Invalid transitions fail without an outbox event, and concurrent modifications are detectable.
 
-**Alternatives:** PostgreSQL could provide durable transactional records. An in-memory map would be simpler but would not survive restarts or work across processes.
+## ADR-003: Transactional Outbox with At-Least-Once Delivery
 
-**Tradeoffs:** Redis provides simple TTL operations, but the current check-then-write flow is not atomic and Redis is not an authoritative ledger.
+**Context:** Writing payment state and publishing directly to Kafka is a dual write; either side can succeed alone.
 
-**Consequences:** The implementation demonstrates the data-access pattern only. A financial workflow needs atomic reservation, request fingerprinting, durable results, and explicit failure behavior.
+**Decision:** Persist event intent with payment state, then publish asynchronously. Retry transient failures with exponential delay, recover stale claims, and dead-letter exhausted events. Publish a stable event ID.
 
-## ADR-003: Kafka as the Asynchronous Event Boundary
+**Alternatives:** Distributed transactions are poorly supported across typical databases and brokers. Change-data capture can remove polling but adds infrastructure.
 
-**Status:** Proposed; not integrated into the main request path
+**Tradeoffs:** A crash after publish and before acknowledgement causes duplicate delivery. Consumers must atomically record processed event IDs with their own updates.
 
-**Context:** Payment state changes often need to notify independent downstream components such as reconciliation or audit processing.
+**Consequences:** Events are not lost after a committed payment update, but end-to-end exactly-once is not claimed.
 
-**Decision:** Represent that boundary with a `payment-events` Kafka topic in the processor and event helper examples.
+## ADR-004: Signed, Replay-Protected Provider Webhooks
 
-**Alternatives:** A direct service call would be simpler but couple availability and latency. A managed queue could reduce operational work for a single-consumer workflow.
+**Context:** Webhook endpoints are public, can be forged, and providers retry deliveries.
 
-**Tradeoffs:** Kafka supports replayable streams, but adds operational complexity and does not by itself make database writes and event publication atomic.
+**Decision:** Verify HMAC-SHA256 over `timestamp.raw_body`, enforce a five-minute window, and insert the provider event ID in the same transaction as the state transition.
 
-**Consequences:** Before integration, the project would need event schemas, delivery acknowledgement, retries, consumers, and an outbox or equivalent consistency mechanism.
+**Alternatives:** Source-IP allowlists are brittle and insufficient alone. Parsed-body signatures can change byte representation.
 
-## ADR-004: In-Process Saga Compensation
+**Tradeoffs:** Clock skew must remain within tolerance and secret rotation needs an overlap strategy not yet implemented.
 
-**Status:** Accepted for demonstration
+**Consequences:** Tampered, stale, and replayed events are rejected before duplicate state changes.
 
-**Context:** A multi-step payment workflow needs to show how completed actions can be undone after a later failure.
+## ADR-005: SQLite for the Runnable Reference Boundary
 
-**Decision:** Execute steps in order and compensate completed steps in reverse order.
+**Context:** Reliability behavior should run locally and in CI without external services.
 
-**Alternatives:** A durable orchestrator such as Temporal could persist workflow progress. Choreographed events could avoid a central coordinator but make the overall flow harder to inspect.
+**Decision:** Use SQLite WAL mode, foreign keys, unique constraints, and explicit transactions for the implemented store.
 
-**Tradeoffs:** The in-process coordinator makes compensation semantics readable, but loses state on process failure and has no retry or timeout policy.
+**Alternatives:** PostgreSQL provides stronger multi-client deployment characteristics but requires test infrastructure. Redis cannot serve as the authoritative relational payment record used here.
 
-**Consequences:** It is suitable as a pattern example only. Durable execution would require persisted state, idempotent steps, retry classification, and operational visibility.
+**Tradeoffs:** SQLite has a single-writer model and is not a high-availability database.
 
-## ADR-005: PostgreSQL Migration for Reconciliation Records
+**Consequences:** The correctness patterns are executable, but a multi-replica deployment requires a PostgreSQL port and equivalent integration tests.
 
-**Status:** Accepted for the schema example
+## ADR-006: Report-Only Reconciliation
 
-**Context:** Reconciliation records have structured identifiers, amounts, dates, and discrepancy details that benefit from relational constraints and indexed queries.
+**Context:** Provider and internal states can diverge because of delayed webhooks, outages, or manual provider actions.
 
-**Decision:** Define the schema in PostgreSQL and version it with Flyway.
+**Decision:** Compare provider snapshots with internal payments and persist mismatches without automatic repair.
 
-**Alternatives:** A document database would allow looser records but provide less value for the structured relationships shown here. Raw SQL initialization would omit migration history.
+**Alternatives:** Automatic correction is faster but can overwrite correct state using delayed or incomplete provider data.
 
-**Tradeoffs:** The relational schema is explicit, but the Maven module is only a dependency sketch and contains no application or migration runner.
+**Tradeoffs:** Operators need a separate review and repair workflow.
 
-**Consequences:** The migration communicates the intended data model. It is not evidence that reconciliation processing is implemented.
-
-## ADR-006: Kubernetes and Terraform as Separate Deployment Examples
-
-**Status:** Incomplete
-
-**Context:** The project explores how an API might declare replicas, autoscaling, networking, and an EKS target.
-
-**Decision:** Keep Kubernetes manifests under `k8s/` and AWS infrastructure definitions under `infra/`.
-
-**Alternatives:** Docker Compose would be better for a complete local environment. A managed application platform would reduce cluster administration.
-
-**Tradeoffs:** The files make infrastructure concerns visible but currently reference missing resources and configuration.
-
-**Consequences:** CI performs formatting and parsing only. It deliberately does not apply infrastructure. IAM, Terraform state, providers, images, Redis, secrets, and runtime validation must be completed before deployment.
+**Consequences:** Every run records counts and discrepancy reasons, providing a safe basis for later remediation tooling.

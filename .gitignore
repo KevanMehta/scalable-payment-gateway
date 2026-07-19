@@ -2,6 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+*.db
+*.db-shm
+*.db-wal
+.env
 
 node_modules/
 frontend/build/

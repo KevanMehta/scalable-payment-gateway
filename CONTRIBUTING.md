@@ -1,30 +1,34 @@
 # Contributing
 
-This repository is a portfolio reference implementation. Contributions that improve correctness, tests, documentation, or the completeness of an existing example are welcome. Please discuss substantial scope changes in an issue before implementing them.
+Contributions should improve correctness, failure handling, tests, or documentation within the existing payment flow. Discuss substantial scope changes in an issue first.
 
 ## Development
 
 1. Fork the repository and create a focused branch.
-2. Use synthetic payment data only. Never commit credentials, account numbers, provider tokens, or customer data.
-3. Install and run the checks relevant to your change:
+2. Use Python 3.11 and synthetic payment data only.
+3. Install and run the checks:
 
    ```bash
-   python -m pip install -r fraud-detection/requirements.txt pytest
-   python -m compileall -q api-gateway fraud-detection load-test payment-service
-   PYTHONPATH=fraud-detection python -m pytest fraud-detection/tests -q
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   python -m pip install -r requirements-dev.txt
+   python -m compileall -q api-gateway fraud-detection load-test payment-service reconciliation
+   PYTHONPATH=api-gateway:fraud-detection python -m pytest api-gateway/tests fraud-detection/tests -q
    terraform fmt -check -recursive infra
    ```
 
-4. Update documentation when behavior, assumptions, or limitations change.
-5. Open a pull request using the repository template.
+4. Update the README, changelog, release notes, and decision records when contracts or guarantees change.
+5. Open a pull request using the template.
 
-The API test is not part of the default suite because it requires a running API and Redis instance. Frontend, reconciliation, infrastructure, and end-to-end test harnesses have not yet been completed.
+## Correctness Expectations
 
-## Pull Request Expectations
+- Put payment state and event intent in one database transaction.
+- Add a unique constraint or atomic conditional write for deduplication; do not rely on a check followed by an unprotected insert.
+- Use integer minor units or an explicitly bounded decimal type for money.
+- Treat remote calls and event delivery as retryable and potentially duplicated.
+- Verify webhooks over the raw request body before parsing them.
+- Test rollback, concurrency, replay, retry exhaustion, and invalid state transitions when changing those paths.
+- Do not claim exactly-once behavior across independent systems. State the transaction boundary and consumer obligations.
+- Do not claim throughput, latency, coverage, or deployment readiness without reproducible evidence.
 
-- Keep changes narrow and explain why they are needed.
-- Add or update tests for behavior changes where a runnable test boundary exists.
-- Do not claim performance, coverage, deployment readiness, or provider behavior without reproducible evidence.
-- Call out migrations, security impact, compatibility concerns, and follow-up work.
-
-By contributing, you agree that your contribution is licensed under the repository's MIT License.
+Never commit credentials, account numbers, real provider tokens, local database files, or customer data. By contributing, you agree that your contribution is licensed under the MIT License.
