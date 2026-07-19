@@ -13,7 +13,7 @@ jobs:
     name: Python checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -34,7 +34,7 @@ jobs:
     name: Configuration checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v3
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive infra
